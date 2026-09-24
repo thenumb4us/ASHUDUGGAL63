@@ -1,155 +1,109 @@
-# ISSUE Background Core and Safe Parental Controls Design
+# ISSUE Family Safety Platform — Product and Technical Design
 
 Date: 2026-09-24
 
-## Purpose
+## Goal and approved direction
 
-Complete ISSUE as a transparent parental-control application with one Android app that supports separate parent and child roles. The parent configures policies; the enrolled child device receives and enforces them. The current UI structure, icon, splash artwork, and wallpapers remain unchanged.
+Build ISSUE as its own transparent family-safety system: parent-managed policies, an enrolled child role that displays its supervision state, and a backend that securely synchronizes rules and device status. The new parent dashboard and feature pages follow the supplied references: clean blue/white surfaces, blue primary actions, colored status accents, child cards, quick controls, usage charts, and a readable activity feed. Preserve the existing launcher icon, splash artwork, and wallpaper. Replace the current plain controls presentation as part of this redesign; do not copy another product's logos or exact screen assets.
 
-Implementation order is fixed:
+Success means the parent can configure policies, see honest per-feature readiness, and receive child-device results; the child sees what is active and can use SOS; backend/device sync works with outages; and every enforcement claim is proven by tests or clearly marked as needing a provisioned child phone. Password/recovery work stays last.
 
-1. Background core and backend reliability.
-2. Safe parental-control features inside the five existing control categories.
-3. End-to-end tests and fixes.
-4. Password, recovery, and remaining account work last.
+## Feature scope and honest Android limits
 
-## Constraints
+All requested feature areas are tracked below. “Supported with consent” means a visible feature disclosure, required Android permission/role, and an obvious active state. No capability may be advertised as working when the OS, permission, enrollment, or device-owner status does not support it.
 
-- Do not redesign `MainActivity`, `ControlCenterActivity`, icons, splash artwork, or wallpapers.
-- Keep the existing five top-level control categories.
-- Child mode is read-only and must not expose parent settings, mode switching, or administrative controls.
-- Parent actions require an authenticated parent session.
-- Device actions require an enrolled device token and active parent-child link.
-- Background supervision must remain visible through an Android foreground-service notification.
-- Location collection runs only when enabled by policy and granted by Android permission.
-- Features that require Device Owner report `Provisioning required` when unavailable; they must never report false success.
-- Current single-phone development can verify builds, backend APIs, local policy persistence, and non-Device-Owner paths. Device Owner enforcement remains marked unverified until a separate resettable child phone is available.
-- Password and recovery changes are excluded until the final phase.
-- Hidden keylogging, covert camera or microphone access, secret screen capture, and covert message monitoring are excluded.
+| Area | Planned behavior | Boundary / readiness |
+| --- | --- | --- |
+| Screen time, per-app limits, app usage reports | Day/week totals, app breakdown, daily cap, warnings, and policy sync | Usage Access required; hard enforcement depends on Device Owner or a supported accessibility-based flow clearly disclosed to the child |
+| Downtime, bedtime, school mode, schedules/routines | Recurring schedules, manual school mode, offline rule evaluation | Local cached policy; Device Owner required for reliable app suspension |
+| App blocking and approval | Parent allow/block list and approval queue for newly installed apps | Device Owner required for package suspension; unsupported actions stay visibly pending/unavailable |
+| Web filtering and SafeSearch | Family DNS policy and domain allow/block rules | Use a clearly disclosed VPN or Private DNS method; filtering is not represented as universal in-app content inspection |
+| In-app purchase protection | Explain and configure available Play Store/device restrictions, with parent guidance | No claim of universal purchase blocking; OS/store controls and child-device setup determine support |
+| Live location, history, geofences, speeding/driving alerts | Policy-enabled location, visible tracking state, configurable safe zones, event history, speed threshold | Location permission and foreground notification required; retention is limited/configurable; background location and device testing required |
+| Battery, network, online, and device status | Last-seen, battery, sync age, permission/protection readiness | Upload only enrolled-device operational status |
+| Remote lock and uninstall protection | Authenticated queued command, acknowledgement, owner/protection state | Device Admin can lock; stronger controls and uninstall protection require Device Owner |
+| SOS / panic | Child-visible one-tap event with location when available and parent alert | Child action is explicit; no covert activation |
+| Call/SMS and contact controls | Contact allow/block management only through supported default dialer/SMS roles; call/SMS event reporting only where Android grants the role and the child/parent setup clearly discloses it | No hidden message-body collection; Android role, regional law, and distribution rules may make this unavailable |
+| Social/content/keyword alerts | Parent-configured risk keywords applied only to content ISSUE itself receives through an explicitly enabled, visible, supported source; report category/time and minimum necessary excerpt | No keystroke capture, private-app scraping, or silent notification harvesting; unsupported apps show unavailable |
+| Gallery safety | Optional on-device, user-visible classification of selected media or an explicitly enabled media library, with parent-configured categories and deletion controls | No secret upload or remote browsing of a child's gallery; process locally where feasible and disclose data handling |
+| Remote camera, one-way audio, screen mirroring | Replace covert remote access with a child-initiated or child-accepted, time-limited assistance session; Android camera/mic indicators and screen-capture consent remain visible, and either participant can stop | No silent camera, ambient listening, or hidden screen capture. Denied/unavailable unless the child accepts each OS-mediated session |
+| Incognito/private browsing | Report that private browsing cannot be reliably identified by a normal app; apply DNS-level family filtering where configured | Do not claim history capture or bypass browser privacy boundaries |
 
-## Current Baseline
+Features explicitly excluded: keylogging, covert camera/microphone/screen access, secret private message/social-media scraping, and hidden collection of call/SMS contents. These are not included under alternate names. The safe alternatives above preserve child awareness and OS consent.
 
-The current project already contains foundations for:
+## UI and navigation
 
-- Parent authentication and parent dashboard.
-- Child enrollment/device sessions.
-- Versioned policy sync and offline policy storage.
-- Command queue and acknowledgements.
-- Usage-stat collection.
-- Foreground supervision service.
-- Boot receiver.
-- Location foreground service.
-- Device Admin and Device Owner operations.
-- Screen-time, bedtime, school-mode, app suspension, uninstall protection, private DNS, Wi-Fi restriction, remote lock, SOS, status, and event code.
-
-The baseline builds, launches, displays the custom splash, reaches parent login, connects to the Kali-hosted backend, and opens the existing five-category Controls screen. Foundations are not yet considered complete until their API contracts, lifecycle behavior, and failure paths are verified.
+- Parent home: greeting, child cards with online/supervision state, quick actions, active limits, recent alerts/feed, and clear navigation to reports and controls.
+- Child detail: day/week usage graph, total screen time, most-used apps, remaining limit, active schedules, location/status, and recent policy events.
+- Controls use the same five existing functional groups—Screen Time, App Controls, Bedtime/School Mode, Location/Safe Zone, SOS/Alerts—but redesigned in the approved blue/white card style. Supporting areas (reports, content alerts, contact options, and assistance sessions) appear as subpages where supported.
+- Every control has a readiness label such as `Active`, `Needs permission`, `Device Owner required`, `Child acceptance required`, `Not supported on this device`, or `Last synced …`. Never show a false-success state.
+- Child mode is read-only for parent policies, displays active supervision and data-sharing status, and retains SOS and relevant permission explanations. It offers no mode switch, parent controls, or hidden administrative actions.
+- Preserve launcher icon, splash image/artwork, and wallpaper. UI redesign applies to in-app screens only.
 
 ## Architecture
 
-### Backend Core
+### Backend and security
 
-The Fastify backend is the source of truth for parent-managed policy and device commands. SQLite stores:
+Fastify is the source of truth for parent-managed policy and enrolled-device events. SQLite stores parent identities, children/devices and active links, hashed/revocable device credentials, versioned policies, commands and acknowledgements, operational status, aggregate usage, SOS/location/geofence events, and audit records. Avoid storing sensitive content when a category/event is sufficient.
 
-- parents, children, devices, and active parent-child links;
-- hashed device credentials and revocation state;
-- one versioned policy per child;
-- pending/applied/failed device commands;
-- device status, usage summaries, SOS events, locations, geofence events, and audit events.
+Parent routes require a valid parent JWT and ownership check for the selected child. Device routes require a valid, revocable device token and active enrollment. Validate payloads and policy versions, rate-limit authentication/sensitive writes, use parameterized database access, and audit administrative changes. Secrets are never logged or committed. Retention/deletion rules apply to location, usage, and event records.
 
-Every parent route verifies a parent JWT and ownership of the requested child. Every device route verifies the enrolled device token. Policy writes increment the policy version and queue a `SYNC_POLICY` command. Remote lock queues a `LOCK_DEVICE` command. Device acknowledgements are idempotent.
+### Android child service and policy engine
 
-### Android Background Core
+Start a visible foreground supervision service only after valid child enrollment and required user-visible setup. Evaluate the last valid policy locally, synchronize on a bounded schedule with retry/backoff, persist policy atomically, upload minimal status and permitted aggregates, and acknowledge each command idempotently. Preserve the last-known policy offline. Boot resume is allowed only for an enrolled child role with a valid token. Clearing enrollment stops supervision and revokes local credentials.
 
-The child role starts a visible foreground supervision service only after valid enrollment. The service:
+The rule engine resolves schedule, daily screen cap, app limits, app allow/block policy, and network policy into an explicit state. Device Owner-only actions (package suspension, uninstall protection and managed restrictions) report exact readiness and cannot silently degrade to success. Prevent ISSUE and required system packages from being blocked.
 
-- evaluates cached rules every minute;
-- syncs policy and commands every five minutes when online;
-- keeps the last valid policy active while offline;
-- uses bounded retry/backoff after network errors;
-- uploads status and usage summaries without blocking enforcement;
-- starts or stops location tracking according to policy and permission;
-- acknowledges each command once;
-- stops when the device session is cleared or the app is no longer in child role.
-
-Boot handling only resumes supervision when the stored role is child and a valid device token exists. Package replacement does not start a foreground service from the background.
-
-### Enforcement
-
-The rule engine calculates one state: `NORMAL`, `SCREEN_TIME_LOCK`, `BEDTIME_LOCK`, or `SCHOOL_MODE`. It combines the global state with explicit blocked packages, per-app limits, purchase blocking, and approved-app rules.
-
-Device Owner capabilities perform package suspension, uninstall protection, private-DNS policy, and Wi-Fi configuration restrictions. Device Admin may perform immediate lock but does not pretend to provide Device Owner capabilities. ISSUE and required system packages are always excluded from suspension.
-
-### Existing Control Categories
-
-The top-level UI remains unchanged. Existing screens gain backend-backed behavior:
-
-1. **Screen Time**: daily limit, remaining time, per-app limits, usage report, and warning status.
-2. **App Controls**: blocked/allowed/approved packages, block-new-apps, purchase blocking, remote lock, uninstall-protection status, safe DNS, and Wi-Fi restriction.
-3. **Bedtime / School Mode**: bedtime, manual school mode, weekly school schedule, and offline routine status.
-4. **Location / Safe Zone**: current/last location, history, geofences, and speeding threshold/events.
-5. **SOS / Alerts**: SOS history, battery/device/online/sync status, command results, and policy alerts.
-
-Controls that cannot operate on the current device show the exact missing permission or provisioning requirement.
-
-### Child Experience
-
-Child mode shows supervision state, usage/remaining time, active schedule, last policy-sync time, location-permission state, and a visible SOS action. It exposes no policy editors, parent tokens, mode switching, removal controls, or Device Owner toggles.
-
-## Data Flow
+### API/data flow
 
 1. Parent authenticates and selects an owned child.
-2. Parent updates a control inside an existing category.
-3. Backend validates and persists the policy, increments its version, records an audit event, and queues sync.
-4. Enrolled child service authenticates, downloads the policy and pending commands, validates them, and saves the policy atomically.
-5. Rule engine evaluates cached policy and applies available Android controls.
-6. Child posts command acknowledgement, status, usage, battery, and allowed event data.
-7. Parent dashboard reads the latest stored device state and history.
+2. Parent edits a policy or requests an allowed assistance session.
+3. Backend validates authorization and payload, persists the version/audit event, and queues a command if needed.
+4. Enrolled child syncs over authenticated transport, validates and atomically caches policy, then applies supported rules.
+5. Child acknowledges command outcome and sends only permitted status, aggregate usage, SOS, and policy-enabled location/geofence events.
+6. Parent reads the latest state, history, and readiness from authenticated endpoints.
 
-## Failure Handling
+## Reliability, privacy, and errors
 
-- Invalid or expired parent sessions return authentication errors without changing policy.
-- Revoked or invalid device tokens stop sync and supervision until re-enrollment.
-- Malformed policy values are rejected server-side and ignored client-side without replacing the last valid policy.
-- Network failure retains the last valid policy and schedules a bounded retry.
-- Missing Usage Access, location permission, notification permission, Device Admin, or Device Owner is surfaced explicitly.
-- A failed command is acknowledged as failed with a safe reason; it is not silently marked applied.
-- Background exceptions are recorded without crashing the launcher activity.
+- Invalid parent sessions, wrong child ownership, revoked device credentials, invalid policy versions, malformed payloads, and replayed commands must not change device policy.
+- Network loss keeps the last valid policy active and retries with bounded backoff; UI shows stale sync time.
+- Missing permission, role, Device Owner provisioning, or child acceptance is reported as a specific state, not an exception or success.
+- Background failures are logged without sensitive payloads and cannot crash launcher/login flows.
+- Collection is purpose-limited, visible, revocable where OS permits, and retained only as specified. Child can see what categories are enabled. Location collection requires an active parent policy and Android permission; audio/video/screen sessions require immediate child acceptance.
+- No private content is uploaded by default. If a supported alert source is enabled, disclose the exact source, data category, and retention before enabling it.
 
-## Testing Strategy
+## Verification strategy
 
-### Automated and Local
+### Automated
 
-- Backend route authentication, ownership, validation, policy versioning, command idempotency, and history tests.
-- Android unit tests for time windows, schedules, policy parsing, state calculation, allowlist protection, and retry timing.
-- Static manifest/component checks.
-- Android debug build and startup test.
-- Backend health and database-health checks.
-- Parent policy write/read cycle and simulated device sync/ack cycle.
+- Backend tests: authentication, ownership, revocation, schema validation, policy versioning, audit events, command idempotency, retention, and history access.
+- Android tests: schedule/time boundaries, usage aggregation, policy parsing/version rollback, rule-state calculation, protected-package allowlist, offline cache, retry/backoff, and capability/readiness states.
+- Static checks: Android manifest permissions/components and prohibition of undeclared sensitive collection; API contract and migration checks.
+- Build, launch/splash/login regression, backend health/database health, policy-write/read, and simulated device sync/ack smoke tests.
 
-### Current Phone
+### Available single phone
 
-- Parent login and dashboard.
-- All five category screens and validation.
-- Backend persistence and displayed status.
-- Usage Access, notification, location, Device Admin, offline-cache, reboot, and visible-service behavior where supported.
+Verify parent login/dashboard, pages and input validation, persistence, backend sync, Usage Access/location prompts where available, visible-service lifecycle, offline cache, SOS submission, and honest unsupported states. Simulate remote device commands rather than claim physical enforcement.
 
-### Deferred Physical Verification
+### Separate child phone required
 
-A separate factory-reset child phone is required to verify Device Owner provisioning, package suspension, uninstall blocking, private-DNS enforcement, Wi-Fi restrictions, and true parent-to-child remote commands. These capabilities remain labeled `Ready — child device testing required` until verified.
+Factory-reset/provision a dedicated test phone to verify Device Owner setup, app suspension, uninstall protection, network restrictions, remote lock, reboot recovery, live location/geofence events, and accepted assistance-session UX. Camera/audio/screen APIs require device-side consent tests and must remain disabled absent a clear child-accepted flow. Mark these `Not verified on a child device` until tested.
 
-## Delivery Batches
+## Delivery sequence
 
-1. **Background Reliability**: schemas, authentication contracts, service lifecycle, offline cache, retry/backoff, boot resume, status/usage/battery, location lifecycle, command acknowledgement, and automated tests.
-2. **Core Controls Wiring**: connect the five existing categories to backend policies and current-device capability status without changing the top-level UI.
-3. **Reports and Alerts**: location history, geofence/speed events, usage/device status, SOS history, command results, and parent-visible alerts.
-4. **Verification and Cleanup**: full builds, backend tests, API smoke tests, startup/login regression, remove temporary crash logger, backups, and GitHub checkpoint.
-5. **Account Finalization**: password and recovery only after the prior batches pass.
+1. **Baseline and security contract** — inventory current Android/backend branches and migrations; lock API/data schemas, auth boundaries, audit/retention, and explicit capability states; restore reproducible build/test baseline.
+2. **Background core** — service lifecycle, enrollment/session hardening, policy cache/versioning, retry/offline behavior, status/usage/battery sync, location lifecycle, command acknowledgement, and tests.
+3. **Approved dashboard redesign** — implement the blue/white parent dashboard, child detail, navigation, five control groups, child read-only state, and truthful readiness labels while preserving icon/splash/wallpaper.
+4. **Core controls** — screen/app limits, app approval/blocking, schedules, network filtering, supported purchase restrictions, remote lock, and uninstall-protection readiness; integrate backend policy sync.
+5. **Safety reports and alerts** — usage reports, location history/geofences/driving alerts, device status, SOS, content alert sources with disclosure, and supported contact-role controls.
+6. **Assisted support and media safety** — assess local media classification and child-accepted time-limited camera/mic/screen support against OS APIs, disclosure, consent, and safety checks; omit any method that cannot preserve these guarantees.
+7. **End-to-end verification and cleanup** — backend and Android tests, build/install regression, child-device tests when available, remove temporary crash logger, review retention/security, and save GitHub checkpoints.
+8. **Account finalization** — password and recovery only after prior work is stable and tested.
 
-Each batch includes an apply script, automatic targeted backup, validation before replacement, and an independently buildable checkpoint. A failed batch is fixed before the next batch begins.
+Each implementation batch must be small enough to build and test, create a targeted backup, verify before replacement, and checkpoint to GitHub. Fix a failed batch before beginning the next. No batch may change launcher icon, splash artwork, or wallpaper.
 
-## Definition of Done
+## Definition of done
 
-Background core is complete when backend tests pass, Android builds, startup/login remain stable, a simulated device can sync policy and acknowledge commands, cached rules survive offline operation, lifecycle/status paths are visible, and no UI/icon/wallpaper regression occurs.
+Background core is done when automated tests pass, Android builds and opens through splash/login, simulated enrolled devices synchronize authenticated policy and idempotent command results, cached rules survive offline periods, and service/readiness states are visible.
 
-Core feature code is complete when all five existing categories persist validated backend policy, expose capability status, and drive the corresponding child policy fields. Device Owner-dependent items are not called fully verified until tested on a separate provisioned child phone.
-
+Feature code is done when each supported control has validated parent policy, persists/syncs, displays honest Android capability requirements, and has unit/API coverage. UI is done when the approved dashboard and reference-inspired feature pages work responsively and preserve the icon/splash/wallpaper. Device Owner and consent-gated features are not called verified until tested on the appropriate physical child-device flow. Password/recovery remains the final phase.
